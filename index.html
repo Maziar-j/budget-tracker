@@ -8,6 +8,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    
     <style>
         body { margin: 0; padding: 0; }
     </style>
@@ -18,27 +23,40 @@
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        // Simple localStorage-based storage for standalone version
-        const storage = {
-            get: (key) => {
-                const value = localStorage.getItem(key);
-                return value ? { value } : null;
-            },
-            set: (key, value) => {
-                localStorage.setItem(key, value);
-                return { key, value };
-            },
-            delete: (key) => {
-                localStorage.removeItem(key);
-                return { key, deleted: true };
-            },
-            list: (prefix) => {
-                const keys = Object.keys(localStorage).filter(k => 
-                    prefix ? k.startsWith(prefix) : true
-                );
-                return { keys };
-            }
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from "firebase/app";
+        // TODO: Add SDKs for Firebase products that you want to use
+        // https://firebase.google.com/docs/web/setup#available-libraries
+        
+        // Your web app's Firebase configuration
+        const firebaseConfig = {
+          apiKey: "AIzaSyD8bRTk1a4PVsVpPrGmMPwDWh5D9QlKPFY",
+          authDomain: "budget-tracker-65260.firebaseapp.com",
+          projectId: "budget-tracker-65260",
+          storageBucket: "budget-tracker-65260.firebasestorage.app",
+          messagingSenderId: "598252496462",
+          appId: "1:598252496462:web:4f518d57c5ec905999c51f"
         };
+        
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        
+        
+        
+
+        // Initialize Firebase
+        let db = null;
+        let isFirebaseConfigured = false;
+
+        try {
+            if (firebaseConfig.apiKey !== "YOUR_API_KEY_HERE") {
+                firebase.initializeApp(firebaseConfig);
+                db = firebase.database();
+                isFirebaseConfigured = true;
+            }
+        } catch (error) {
+            console.error("Firebase initialization error:", error);
+        }
 
         function BudgetTracker() {
             const [balance, setBalance] = useState(0);
@@ -48,38 +66,71 @@
             const [history, setHistory] = useState([]);
             const [showHistory, setShowHistory] = useState(false);
             const [loading, setLoading] = useState(true);
+            const [syncStatus, setSyncStatus] = useState('checking');
 
             useEffect(() => {
-                loadData();
+                if (!isFirebaseConfigured) {
+                    setSyncStatus('not-configured');
+                    setLoading(false);
+                    return;
+                }
+
+                setupRealtimeListeners();
             }, []);
 
-            const loadData = () => {
-                try {
-                    const balanceResult = storage.get('budget_balance');
-                    const transactionsResult = storage.get('budget_transactions');
-                    const historyResult = storage.get('budget_history');
+            const setupRealtimeListeners = () => {
+                setSyncStatus('syncing');
 
-                    if (balanceResult) setBalance(parseFloat(balanceResult.value));
-                    if (transactionsResult) setTransactions(JSON.parse(transactionsResult.value));
-                    if (historyResult) setHistory(JSON.parse(historyResult.value));
-                } catch (error) {
-                    console.log('No existing data found, starting fresh');
-                }
-                setLoading(false);
+                // Listen to balance changes
+                db.ref('budget/balance').on('value', (snapshot) => {
+                    const value = snapshot.val();
+                    if (value !== null) {
+                        setBalance(parseFloat(value));
+                    }
+                    setLoading(false);
+                    setSyncStatus('synced');
+                });
+
+                // Listen to transactions changes
+                db.ref('budget/transactions').on('value', (snapshot) => {
+                    const value = snapshot.val();
+                    if (value !== null) {
+                        setTransactions(value);
+                    }
+                });
+
+                // Listen to history changes
+                db.ref('budget/history').on('value', (snapshot) => {
+                    const value = snapshot.val();
+                    if (value !== null) {
+                        setHistory(value);
+                    }
+                });
             };
 
-            const saveData = (newBalance, newTransactions, newHistory = history) => {
+            const saveData = async (newBalance, newTransactions, newHistory = history) => {
+                if (!isFirebaseConfigured) {
+                    alert('Firebase not configured. Please add your Firebase config.');
+                    return;
+                }
+
                 try {
-                    storage.set('budget_balance', newBalance.toString());
-                    storage.set('budget_transactions', JSON.stringify(newTransactions));
-                    storage.set('budget_history', JSON.stringify(newHistory));
+                    setSyncStatus('syncing');
+                    await db.ref('budget').set({
+                        balance: newBalance,
+                        transactions: newTransactions,
+                        history: newHistory,
+                        lastUpdated: new Date().toISOString()
+                    });
+                    setSyncStatus('synced');
                 } catch (error) {
                     console.error('Error saving data:', error);
-                    alert('Failed to save data. Please try again.');
+                    setSyncStatus('error');
+                    alert('Failed to save data. Please check your connection.');
                 }
             };
 
-            const handleTransaction = (type) => {
+            const handleTransaction = async (type) => {
                 const value = parseFloat(amount);
                 if (!value || value <= 0 || !description.trim()) {
                     alert('Please enter a valid amount and description');
@@ -97,15 +148,13 @@
                 const newBalance = type === 'add' ? balance + value : balance - value;
                 const newTransactions = [transaction, ...transactions];
 
-                setBalance(newBalance);
-                setTransactions(newTransactions);
                 setAmount('');
                 setDescription('');
 
-                saveData(newBalance, newTransactions);
+                await saveData(newBalance, newTransactions);
             };
 
-            const deleteTransaction = (transactionId) => {
+            const deleteTransaction = async (transactionId) => {
                 if (!window.confirm('Delete this transaction?')) return;
 
                 const transaction = transactions.find(t => t.id === transactionId);
@@ -117,13 +166,10 @@
                 
                 const newTransactions = transactions.filter(t => t.id !== transactionId);
 
-                setBalance(newBalance);
-                setTransactions(newTransactions);
-
-                saveData(newBalance, newTransactions);
+                await saveData(newBalance, newTransactions);
             };
 
-            const resetMonth = () => {
+            const resetMonth = async () => {
                 if (!window.confirm('Reset for new month? This will save current data to history.')) return;
 
                 const monthData = {
@@ -134,11 +180,8 @@
                 };
 
                 const newHistory = [monthData, ...history];
-                setHistory(newHistory);
-                setBalance(0);
-                setTransactions([]);
 
-                saveData(0, [], newHistory);
+                await saveData(0, [], newHistory);
             };
 
             const totalIncome = transactions
@@ -148,6 +191,26 @@
             const totalExpenses = transactions
                 .filter(t => t.type === 'subtract')
                 .reduce((sum, t) => sum + t.amount, 0);
+
+            const getSyncStatusColor = () => {
+                switch(syncStatus) {
+                    case 'synced': return 'text-green-600';
+                    case 'syncing': return 'text-yellow-600';
+                    case 'error': return 'text-red-600';
+                    case 'not-configured': return 'text-orange-600';
+                    default: return 'text-gray-600';
+                }
+            };
+
+            const getSyncStatusText = () => {
+                switch(syncStatus) {
+                    case 'synced': return '✓ Synced';
+                    case 'syncing': return '⟳ Syncing...';
+                    case 'error': return '⚠ Sync Error';
+                    case 'not-configured': return '⚠ Firebase Not Configured';
+                    default: return 'Checking...';
+                }
+            };
 
             if (loading) {
                 return (
@@ -168,7 +231,22 @@
                                 </svg>
                                 Monthly Budget Tracker
                             </h1>
-                            <p className="text-sm text-gray-500">Shared budget tracker • Syncs via browser storage</p>
+                            <div className="flex justify-between items-center">
+                                <p className="text-sm text-gray-500">Shared with your wife • Real-time sync</p>
+                                <p className={`text-sm font-semibold ${getSyncStatusColor()}`}>
+                                    {getSyncStatusText()}
+                                </p>
+                            </div>
+                            
+                            {syncStatus === 'not-configured' && (
+                                <div className="mt-4 p-4 bg-orange-50 border-2 border-orange-200 rounded-lg">
+                                    <p className="text-sm text-orange-800 font-semibold mb-2">⚠️ Firebase Configuration Required</p>
+                                    <p className="text-xs text-orange-700">
+                                        Please replace the Firebase config in the HTML file with your own Firebase project credentials. 
+                                        See the setup instructions for details.
+                                    </p>
+                                </div>
+                            )}
                         </div>
 
                         {/* Balance Card */}
@@ -209,12 +287,14 @@
                                     placeholder="Description (e.g., Salary, Groceries)"
                                     value={description}
                                     onChange={(e) => setDescription(e.target.value)}
+                                    onKeyPress={(e) => e.key === 'Enter' && handleTransaction('add')}
                                     className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
                                 />
                                 <div className="flex gap-3">
                                     <button
                                         onClick={() => handleTransaction('add')}
                                         className="flex-1 bg-green-500 hover:bg-green-600 text-white py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors"
+                                        disabled={syncStatus === 'not-configured'}
                                     >
                                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -224,6 +304,7 @@
                                     <button
                                         onClick={() => handleTransaction('subtract')}
                                         className="flex-1 bg-red-500 hover:bg-red-600 text-white py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors"
+                                        disabled={syncStatus === 'not-configured'}
                                     >
                                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
@@ -239,6 +320,7 @@
                             <button
                                 onClick={resetMonth}
                                 className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors"
+                                disabled={syncStatus === 'not-configured'}
                             >
                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -278,6 +360,7 @@
                                                     onClick={() => deleteTransaction(t.id)}
                                                     className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2 rounded-lg transition-colors"
                                                     title="Delete transaction"
+                                                    disabled={syncStatus === 'not-configured'}
                                                 >
                                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
