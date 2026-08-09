@@ -8,7 +8,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
 
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
@@ -146,7 +146,6 @@
             const [description, setDescription] = useState('');
             const [txType, setTxType] = useState('subtract'); // 'add' income | 'subtract' expense
             const [category, setCategory] = useState('');
-            const [isCreditCard, setIsCreditCard] = useState(false);
 
             const [transactions, setTransactions] = useState([]);
             const [history, setHistory] = useState([]);
@@ -210,8 +209,7 @@
                     amount: value,
                     description: description.trim(),
                     category: txType === 'add' ? 'Income' : category,
-                    isCreditCard: txType === 'subtract' ? isCreditCard : false,
-                    paid: txType === 'subtract' && isCreditCard ? false : true,
+                    paid: txType === 'subtract' ? false : true,
                     date: new Date().toLocaleString(),
                     timestamp: Date.now(),
                 };
@@ -219,7 +217,6 @@
                 setAmount('');
                 setDescription('');
                 setCategory('');
-                setIsCreditCard(false);
 
                 try {
                     setSyncStatus('syncing');
@@ -259,8 +256,8 @@
             const totalIncome = useMemo(() => transactions.filter(t => t.type === 'add').reduce((s, t) => s + t.amount, 0), [transactions]);
             const totalExpenses = useMemo(() => transactions.filter(t => t.type === 'subtract').reduce((s, t) => s + t.amount, 0), [transactions]);
             const balance = totalIncome - totalExpenses;
-            const unpaidCardTotal = useMemo(
-                () => transactions.filter(t => t.type === 'subtract' && t.isCreditCard && !t.paid).reduce((s, t) => s + t.amount, 0),
+            const unpaidTotal = useMemo(
+                () => transactions.filter(t => t.type === 'subtract' && !t.paid).reduce((s, t) => s + t.amount, 0),
                 [transactions]
             );
 
@@ -420,13 +417,13 @@
                                             </svg>
                                             <span>Expenses: ${totalExpenses.toFixed(2)}</span>
                                         </div>
-                                        {unpaidCardTotal > 0 && (
+                                        {unpaidTotal > 0 && (
                                             <div className="flex items-center gap-2 bg-white/15 px-2 py-0.5 rounded-lg">
                                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <rect x="2" y="5" width="20" height="14" rx="2" strokeWidth={2} />
                                                     <path strokeLinecap="round" strokeWidth={2} d="M2 10h20" />
                                                 </svg>
-                                                <span>Unpaid on card: ${unpaidCardTotal.toFixed(2)}</span>
+                                                <span>Unpaid: ${unpaidTotal.toFixed(2)}</span>
                                             </div>
                                         )}
                                     </div>
@@ -494,18 +491,6 @@
                                             className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
                                         />
 
-                                        {txType === 'subtract' && (
-                                            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isCreditCard}
-                                                    onChange={(e) => setIsCreditCard(e.target.checked)}
-                                                    className="w-4 h-4 accent-indigo-600"
-                                                />
-                                                💳 Charged to credit card (track as paid/unpaid)
-                                            </label>
-                                        )}
-
                                         <button
                                             onClick={handleTransaction}
                                             className={`w-full py-3 rounded-lg font-semibold text-white transition-colors ${
@@ -550,7 +535,7 @@
                                                             >
                                                                 {t.category || (t.type === 'add' ? 'Income' : 'Other')}
                                                             </span>
-                                                            {t.isCreditCard && (
+                                                            {t.type === 'subtract' && (
                                                                 <button
                                                                     onClick={() => togglePaid(t)}
                                                                     className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${
