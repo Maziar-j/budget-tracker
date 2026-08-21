@@ -57,6 +57,8 @@
             { name: "Other Grocery", color: "#16A34A", icon: "🥦" },
             { name: "Clothing",      color: "#9333EA", icon: "👕" },
             { name: "Furniture",     color: "#78350F", icon: "🛋️" },
+            { name: "Household",     color: "#0D9488", icon: "🧹" },
+            { name: "Uber/Transit",  color: "#F59E0B", icon: "🚗" },
             { name: "Rent",          color: "#B45309", icon: "🏠" },
             { name: "Tuition",       color: "#0891B2", icon: "🎓" },
             { name: "Bills",         color: "#DC2626", icon: "🧾" },
@@ -64,9 +66,9 @@
             { name: "Other",         color: "#6B7280", icon: "🔖" },
         ];
         const CATEGORY_GROUPS = [
-            { title: "Shopping",     items: ["Walmart", "Costco", "Other Grocery", "Clothing", "Furniture"] },
+            { title: "Shopping",     items: ["Walmart", "Costco", "Other Grocery", "Clothing", "Furniture", "Household"] },
             { title: "Home & Bills", items: ["Rent", "Tuition", "Bills"] },
-            { title: "Lifestyle",    items: ["Fun", "Other"] },
+            { title: "Lifestyle",    items: ["Uber/Transit", "Fun", "Other"] },
         ];
         const CATEGORY_COLOR = Object.fromEntries(CATEGORIES.map(c => [c.name, c.color]));
         const CATEGORY_ICON = Object.fromEntries(CATEGORIES.map(c => [c.name, c.icon]));
@@ -150,8 +152,52 @@
             );
         }
 
+        const TABS = [
+            { id: 'dashboard', label: '🏠 Dashboard' },
+            { id: 'charts', label: '📊 Charts' },
+            { id: 'archive', label: '📦 Archive' },
+        ];
+        const TAB_IDS = TABS.map(t => t.id);
+
         function BudgetTracker() {
             const [activeTab, setActiveTab] = useState('dashboard');
+            const touchStartRef = useRef(null);
+
+            const goToTab = (direction) => {
+                const idx = TAB_IDS.indexOf(activeTab);
+                const nextIdx = idx + direction;
+                if (nextIdx >= 0 && nextIdx < TAB_IDS.length) {
+                    setActiveTab(TAB_IDS[nextIdx]);
+                }
+            };
+
+            const handleTouchStart = (e) => {
+                const t = e.touches[0];
+                touchStartRef.current = { x: t.clientX, y: t.clientY, time: Date.now() };
+            };
+
+            const handleTouchEnd = (e) => {
+                if (!touchStartRef.current) return;
+                const t = e.changedTouches[0];
+                const dx = t.clientX - touchStartRef.current.x;
+                const dy = t.clientY - touchStartRef.current.y;
+                const elapsed = Date.now() - touchStartRef.current.time;
+                touchStartRef.current = null;
+
+                const SWIPE_THRESHOLD = 60;
+                const MAX_OFF_AXIS = 80;
+                const MAX_TIME = 800;
+
+                if (elapsed > MAX_TIME) return;
+                if (Math.abs(dx) < SWIPE_THRESHOLD) return;
+                if (Math.abs(dy) > MAX_OFF_AXIS) return;
+
+                if (dx < 0) {
+                    goToTab(1); // swipe left -> next tab
+                } else {
+                    goToTab(-1); // swipe right -> previous tab
+                }
+            };
 
             const [amount, setAmount] = useState('');
             const [description, setDescription] = useState('');
@@ -373,8 +419,12 @@
             }
 
             return (
-                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-                    <div className="max-w-2xl mx-auto">
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 pb-24">
+                    <div
+                        className="max-w-2xl mx-auto"
+                        onTouchStart={handleTouchStart}
+                        onTouchEnd={handleTouchEnd}
+                    >
                         {/* Header */}
                         <div className="bg-white rounded-2xl shadow-lg p-6 mb-4">
                             <h1 className="text-3xl font-bold text-gray-800 mb-2 flex items-center gap-2">
@@ -411,25 +461,6 @@
                                     </p>
                                 </div>
                             )}
-                        </div>
-
-                        {/* Tabs */}
-                        <div className="bg-white rounded-2xl shadow-lg p-2 mb-4 flex gap-2">
-                            {[
-                                { id: 'dashboard', label: '🏠 Dashboard' },
-                                { id: 'charts', label: '📊 Charts' },
-                                { id: 'archive', label: '📦 Archive' },
-                            ].map(tab => (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setActiveTab(tab.id)}
-                                    className={`flex-1 py-2 rounded-xl font-semibold text-sm transition-colors ${
-                                        activeTab === tab.id ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
-                                    }`}
-                                >
-                                    {tab.label}
-                                </button>
-                            ))}
                         </div>
 
                         {activeTab === 'dashboard' && (
@@ -706,6 +737,23 @@
                                 )}
                             </>
                         )}
+                    </div>
+
+                    {/* Bottom Tab Bar */}
+                    <div className="fixed bottom-0 left-0 right-0 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.08)] border-t border-gray-100 z-20">
+                        <div className="max-w-2xl mx-auto flex gap-2 p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
+                            {TABS.map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={`flex-1 py-2.5 rounded-xl font-semibold text-sm transition-colors ${
+                                        activeTab === tab.id ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                                    }`}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
             );
