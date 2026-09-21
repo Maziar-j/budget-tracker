@@ -224,6 +224,7 @@
                                 }
                             }
                         },
+                        maintainAspectRatio: false,
                         scales: {
                             x: {
                                 type: 'linear',
@@ -231,6 +232,7 @@
                                 max: Math.max(points.length - 1, 0),
                                 ticks: {
                                     stepSize: 1,
+                                    font: { size: 12 },
                                     callback: (val) => {
                                         const p = points[val];
                                         if (!p) return '';
@@ -239,7 +241,10 @@
                                     }
                                 }
                             },
-                            y: { beginAtZero: true, ticks: { callback: (v) => '$' + v } }
+                            y: {
+                                beginAtZero: true,
+                                ticks: { font: { size: 12 }, callback: (v) => '$' + v }
+                            }
                         }
                     }
                 });
@@ -260,7 +265,11 @@
                 return <p className="text-gray-400 text-sm text-center py-8">No category spending recorded since August 2026 yet.</p>;
             }
 
-            return <canvas ref={canvasRef}></canvas>;
+            return (
+                <div style={{ height: '420px' }}>
+                    <canvas ref={canvasRef}></canvas>
+                </div>
+            );
         }
 
         const TABS = [
