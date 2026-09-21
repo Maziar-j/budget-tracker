@@ -177,8 +177,9 @@
             const canvasRef = useRef(null);
             const chartRef = useRef(null);
 
+            // Only chart categories that have at least one real (tracked) data point above $0
             const activeCategories = CATEGORIES.filter(c =>
-                points.some(p => (p.totals[c.name] || 0) > 0)
+                points.some(p => p.totals && (p.totals[c.name] || 0) > 0)
             );
 
             useEffect(() => {
@@ -190,32 +191,54 @@
                 if (points.length === 0 || activeCategories.length === 0) return;
 
                 chartRef.current = new Chart(canvasRef.current, {
-                    type: 'line',
+                    type: 'scatter',
                     data: {
-                        labels: points.map(p => p.label),
                         datasets: activeCategories.map(c => ({
                             label: `${c.icon} ${c.name}`,
-                            data: points.map(p => p.totals[c.name] || 0),
-                            borderColor: c.color,
+                            // Only plot months we actually have a record for (skip untracked gap months)
+                            data: points
+                                .map((p, idx) => p.totals ? { x: idx, y: p.totals[c.name] || 0 } : null)
+                                .filter(Boolean),
                             backgroundColor: c.color,
-                            tension: 0.3,
-                            spanGaps: true,
-                            pointRadius: 4,
-                            pointHoverRadius: 6,
+                            borderColor: c.color,
+                            showLine: true,
+                            borderWidth: 1.5,
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            pointStyle: (ctx) => (points[ctx?.raw?.x]?.isCurrent ? 'rectRot' : 'circle'),
                         }))
                     },
                     options: {
                         responsive: true,
-                        interaction: { mode: 'index', intersect: false },
+                        interaction: { mode: 'nearest', intersect: true },
                         plugins: {
                             legend: { position: 'bottom', labels: { boxWidth: 12, padding: 10, font: { size: 11 } } },
                             tooltip: {
                                 callbacks: {
-                                    label: (ctx) => ` ${ctx.dataset.label}: $${ctx.raw.toFixed(2)}`
+                                    title: (items) => {
+                                        const idx = items[0]?.raw?.x;
+                                        const p = points[idx];
+                                        return p ? (p.label + (p.isCurrent ? ' (in progress)' : '')) : '';
+                                    },
+                                    label: (ctx) => ` ${ctx.dataset.label}: $${ctx.raw.y.toFixed(2)}`
                                 }
                             }
                         },
                         scales: {
+                            x: {
+                                type: 'linear',
+                                min: 0,
+                                max: Math.max(points.length - 1, 0),
+                                ticks: {
+                                    stepSize: 1,
+                                    callback: (val) => {
+                                        const p = points[val];
+                                        if (!p) return '';
+                                        const [month, year] = p.label.split(' ');
+                                        return month.slice(0, 3) + " '" + year.slice(2);
+                                    }
+                                }
+                            },
                             y: { beginAtZero: true, ticks: { callback: (v) => '$' + v } }
                         }
                     }
@@ -231,10 +254,10 @@
             }, [JSON.stringify(points)]);
 
             if (points.length === 0) {
-                return <p className="text-gray-400 text-sm text-center py-8">Not enough data yet — start a new month to build up trend history.</p>;
+                return <p className="text-gray-400 text-sm text-center py-8">No months to show yet.</p>;
             }
             if (activeCategories.length === 0) {
-                return <p className="text-gray-400 text-sm text-center py-8">No category spending recorded yet.</p>;
+                return <p className="text-gray-400 text-sm text-center py-8">No category spending recorded since August 2026 yet.</p>;
             }
 
             return <canvas ref={canvasRef}></canvas>;
@@ -496,29 +519,57 @@
                 return [...current, ...past].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
             }, [categoryDetail, transactions, history, chartsResetAt]);
 
-            // Per-category spending for each archived month, plus the current in-progress month, in chronological order
+            // Per-category spending for every calendar month from Aug 2026 through the current
+            // (unarchived) month, so the trend chart always includes "right now" even before a reset.
             const monthlyCategoryTrend = useMemo(() => {
-                const sortedHistory = [...history].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-                const points = sortedHistory.map(month => {
+                const monthLabel = (d) => d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+                // Totals for each archived month, keyed by its label
+                const byLabel = {};
+                history.forEach(month => {
                     const totals = {};
                     (month.transactions || []).forEach(t => {
                         if (t.type === 'subtract') {
                             totals[t.category || 'Other'] = (totals[t.category || 'Other'] || 0) + t.amount;
                         }
                     });
-                    return { label: month.month, totals };
+                    byLabel[month.month] = totals;
                 });
 
-                if (transactions.length > 0) {
-                    const totals = {};
-                    transactions.forEach(t => {
-                        if (t.type === 'subtract') {
-                            totals[t.category || 'Other'] = (totals[t.category || 'Other'] || 0) + t.amount;
-                        }
-                    });
-                    points.push({ label: 'Current', totals });
-                }
+                // Live, not-yet-archived month always counts as a tracked month (even if $0 so far)
+                const now = new Date();
+                const currentLabel = monthLabel(now);
+                const currentTotals = {};
+                transactions.forEach(t => {
+                    if (t.type === 'subtract') {
+                        currentTotals[t.category || 'Other'] = (currentTotals[t.category || 'Other'] || 0) + t.amount;
+                    }
+                });
+                byLabel[currentLabel] = currentTotals;
 
+                // Walk every calendar month from Aug 2026 through the later of "now" or the
+                // latest archived month, so the axis is a real timeline, not just archive count.
+                const start = new Date(2026, 7, 1); // August 2026
+                let end = new Date(now.getFullYear(), now.getMonth(), 1);
+                history.forEach(month => {
+                    if (month.timestamp) {
+                        const d = new Date(month.timestamp);
+                        const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
+                        if (monthStart > end) end = monthStart;
+                    }
+                });
+
+                const points = [];
+                let cursor = new Date(start);
+                while (cursor <= end) {
+                    const label = monthLabel(cursor);
+                    points.push({
+                        label,
+                        isCurrent: label === currentLabel,
+                        totals: Object.prototype.hasOwnProperty.call(byLabel, label) ? byLabel[label] : null,
+                    });
+                    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+                }
                 return points;
             }, [history, transactions]);
 
