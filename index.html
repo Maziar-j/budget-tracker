@@ -95,7 +95,7 @@
         body .bg-gradient-to-r.from-indigo-600 .opacity-90 { opacity: .7; font-weight: 500; }
     
         /* ---- Inputs ---- */
-        body input[type="text"], body input[type="number"] {
+        body input[type="text"], body input[type="number"], body input[type="month"] {
             background: #FAFBFE;
             border: 1.5px solid #E3E6EF;
             border-radius: var(--r-ctl);
@@ -270,6 +270,11 @@
                 .map(([key, val]) => ({ ...val, key }))
                 .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
         }
+        function monthKeyOf(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+        function monthKeyToDate(key) { const [y, m] = key.split('-').map(Number); return new Date(y, m - 1, 1); }
+        function monthKeyToLabel(key) { return monthKeyToDate(key).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
+        function shiftMonthKey(key, n) { const d = monthKeyToDate(key); return monthKeyOf(new Date(d.getFullYear(), d.getMonth() + n, 1)); }
+        function labelToMonthKey(label) { const d = new Date((label || '').replace(' ', ' 1, ')); return isNaN(d) ? null : monthKeyOf(d); }
 
         // ---- Pie chart (raw Chart.js, no wrapper lib) ----
         function PieChart({ title, dataMap, emptyLabel, onSliceClick }) {
@@ -708,6 +713,10 @@
             const [loading, setLoading] = useState(true);
             const [syncStatus, setSyncStatus] = useState('checking');
             const [syncError, setSyncError] = useState('');
+            const [currentMonthKey, setCurrentMonthKey] = useState(null); // e.g. "2026-11"
+            const [showNewMonth, setShowNewMonth] = useState(false);
+            const [closingKey, setClosingKey] = useState('');
+            const [startingKey, setStartingKey] = useState('');
 
             useEffect(() => {
                 if (!isFirebaseConfigured) {
@@ -752,6 +761,10 @@
                     const list = v ? (Array.isArray(v) ? v : Object.values(v)).filter(Boolean) : [];
                     setCustomCats(list.length > 0 ? list : null);
                 }, handleDbError('loading categories'));
+
+                db.ref(base + '/currentMonth').on('value', (snapshot) => {
+                    setCurrentMonthKey(snapshot.val() || null);
+                }, handleDbError('loading current month'));
             };
 
             const requireDb = () => {
@@ -831,12 +844,31 @@
                 [transactions]
             );
 
-            const resetMonth = async () => {
+            const trackedMonthKey = currentMonthKey || monthKeyOf(new Date());
+            
+            const openNewMonth = () => {
                 if (!requireDb()) return;
-                if (!window.confirm('Start a new month? This will save all current data to the archive and clear your current transactions.')) return;
-
+                const today = new Date();
+                // If we don't know the tracked month yet, guess: early in a month usually means closing the previous one
+                const guess = today.getDate() <= 7 ? shiftMonthKey(monthKeyOf(today), -1) : monthKeyOf(today);
+                const closing = currentMonthKey || guess;
+                setClosingKey(closing);
+                setStartingKey(shiftMonthKey(closing, 1));
+                setShowNewMonth(true);
+            };
+            
+            const confirmNewMonth = async () => {
+                if (!closingKey || !startingKey) { alert('Please pick both months.'); return; }
+                if (startingKey <= closingKey) { alert('The new month needs to come after the month you are closing.'); return; }
+            
+                const closingLabel = monthKeyToLabel(closingKey);
+                if (history.some(h => h.month === closingLabel)) {
+                    if (!window.confirm(closingLabel + ' is already in your archive. Archive it again anyway?')) return;
+                }
+            
                 const monthData = {
-                    month: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+                    month: closingLabel,
+                    monthKey: closingKey,
                     finalBalance: balance,
                     totalIncome,
                     totalExpenses,
@@ -844,11 +876,17 @@
                     resetDate: new Date().toLocaleString(),
                     timestamp: Date.now(),
                 };
-
+            
                 try {
                     setSyncStatus('syncing');
-                    await db.ref(base + '/history').push(monthData);
-                    await db.ref(base + '/transactions').remove();
+                    const newKey = db.ref(base + '/history').push().key;
+                    // One atomic write: either everything happens or nothing does
+                    await db.ref(base).update({
+                        ['history/' + newKey]: monthData,
+                        transactions: null,
+                        currentMonth: startingKey,
+                    });
+                    setShowNewMonth(false);
                     setSyncStatus('synced');
                 } catch (error) {
                     handleDbError('archiving month')(error);
@@ -982,8 +1020,7 @@
                 });
 
                 // Live, not-yet-archived month always counts as a tracked month (even if $0 so far)
-                const now = new Date();
-                const currentLabel = monthLabel(now);
+                const currentLabel = monthKeyToLabel(trackedMonthKey);
                 const currentTotals = {};
                 transactions.forEach(t => {
                     if (t.type === 'subtract') {
@@ -995,12 +1032,12 @@
                 // Walk every calendar month from Aug 2026 through the later of "now" or the
                 // latest archived month, so the axis is a real timeline, not just archive count.
                 const start = new Date(2026, 7, 1); // August 2026
-                let end = new Date(now.getFullYear(), now.getMonth(), 1);
+                let end = monthKeyToDate(trackedMonthKey);
                 history.forEach(month => {
-                    if (month.timestamp) {
-                        const d = new Date(month.timestamp);
-                        const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
-                        if (monthStart > end) end = monthStart;
+                    const k = month.monthKey || labelToMonthKey(month.month);
+                    if (k) {
+                        const d = monthKeyToDate(k);
+                        if (d > end) end = d;
                     }
                 });
 
@@ -1016,7 +1053,7 @@
                     cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
                 }
                 return points;
-            }, [history, transactions]);
+            }, [history, transactions, trackedMonthKey]);
 
             const resetAllTimeChart = async () => {
                 if (!requireDb()) return;
@@ -1162,17 +1199,25 @@
                                             − Expense
                                         </button>
                                     </div>
-
+                                    
                                     <div className="space-y-4">
+                                    <div className="relative">
+                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-semibold text-gray-400 pointer-events-none">$</span>
                                         <input
                                             type="number"
-                                            placeholder="Amount"
+                                            inputMode="decimal"
+                                            placeholder="0.00"
                                             value={amount}
                                             onChange={(e) => setAmount(e.target.value)}
-                                            className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none text-lg"
+                                            onBlur={() => {
+                                                const n = parseFloat(amount);
+                                                if (n > 0) setAmount(n.toFixed(2));
+                                            }}
+                                            className="w-full pl-9 pr-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none text-lg font-semibold"
                                             step="0.01"
+                                            min="0"
                                         />
-
+                                    </div>
                                         {txType === 'subtract' && (
                                             <div>
                                                 <div className="flex justify-between items-center mb-2">
@@ -1250,7 +1295,7 @@
                                 {/* Action Buttons */}
                                 <div className="flex gap-3 mb-6">
                                     <button
-                                        onClick={resetMonth}
+                                        onClick={openNewMonth}
                                         className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors"
                                         disabled={syncStatus === 'not-configured'}
                                     >
@@ -1264,7 +1309,7 @@
                                 {/* Current Month Transactions */}
                                 {transactions.length > 0 && (
                                     <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
-                                        <h2 className="text-xl font-bold text-gray-800 mb-4">This Month's Transactions</h2>
+                                        <h2 className="text-xl font-bold text-gray-800 mb-4">{monthKeyToLabel(trackedMonthKey)} Transactions</h2>
                                         <div className="space-y-2 max-h-96 overflow-y-auto">
                                             {transactions.map((t) => (
                                                 <div
@@ -1546,6 +1591,49 @@
                                 <div className="flex justify-between pt-1">
                                     <button onClick={leaveBudget} className="text-xs font-semibold text-red-600 underline">Leave this budget</button>
                                     <button onClick={() => setShowShare(false)} className="text-xs font-semibold text-gray-500 underline">Close</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    {showNewMonth && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-40 p-4" onClick={() => setShowNewMonth(false)}>
+                            <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+                                <h3 className="font-bold text-lg text-gray-800">📅 Start a new month</h3>
+                    
+                                <div>
+                                    <label className="text-xs font-semibold text-gray-500 block mb-1">Month you're closing out</label>
+                                    <input
+                                        type="month"
+                                        value={closingKey}
+                                        onChange={(e) => {
+                                            setClosingKey(e.target.value);
+                                            if (e.target.value) setStartingKey(shiftMonthKey(e.target.value, 1));
+                                        }}
+                                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                                    />
+                                </div>
+                    
+                                <div>
+                                    <label className="text-xs font-semibold text-gray-500 block mb-1">Month you're starting</label>
+                                    <input
+                                        type="month"
+                                        value={startingKey}
+                                        onChange={(e) => setStartingKey(e.target.value)}
+                                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                                    />
+                                </div>
+                    
+                                {closingKey && startingKey && (
+                                    <p className="text-sm text-gray-600">
+                                        {monthKeyToLabel(closingKey)} will be saved to the archive, and you'll start fresh in {monthKeyToLabel(startingKey)}.
+                                    </p>
+                                )}
+                    
+                                <button onClick={confirmNewMonth} className="w-full py-3 rounded-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700">
+                                    Archive and start new month
+                                </button>
+                                <div className="flex justify-end">
+                                    <button onClick={() => setShowNewMonth(false)} className="text-xs font-semibold text-gray-500 underline">Cancel</button>
                                 </div>
                             </div>
                         </div>
