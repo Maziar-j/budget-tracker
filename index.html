@@ -588,58 +588,6 @@
             );
         }
 
-        // ---- "Add to Home Screen" hint for iOS ----
-        function InstallPrompt() {
-            const [show, setShow] = useState(false);
-        
-            useEffect(() => {
-                const ua = navigator.userAgent;
-                const isIOS = /iPad|iPhone|iPod/.test(ua) ||
-                    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS
-                const isStandalone = window.navigator.standalone === true ||
-                    window.matchMedia('(display-mode: standalone)').matches;
-                let dismissed = false;
-                try { dismissed = localStorage.getItem('twocents-a2hs-dismissed') === '1'; } catch (e) {}
-        
-                if (isIOS && !isStandalone && !dismissed) setShow(true);
-            }, []);
-        
-            const dismiss = () => {
-                try { localStorage.setItem('twocents-a2hs-dismissed', '1'); } catch (e) {}
-                setShow(false);
-            };
-        
-            if (!show) return null;
-        
-            return (
-                <div
-                    className="fixed left-0 right-0 z-30 px-4"
-                    style={{ bottom: 'calc(5rem + env(safe-area-inset-bottom))' }}
-                >
-                    <div className="max-w-2xl mx-auto bg-white rounded-2xl shadow-xl border border-gray-200 p-4 flex items-start gap-3">
-                        <img src="icon-180.png" alt="" className="w-12 h-12 rounded-xl flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                            <div className="font-bold text-gray-800 text-sm">Add TwoCents to your Home Screen</div>
-                            <p className="text-xs text-gray-600 mt-1">
-                                Tap the{' '}
-                                <svg className="inline w-4 h-4 -mt-0.5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 16V4m0 0L8 8m4-4l4 4M6 12v7a2 2 0 002 2h8a2 2 0 002-2v-7" />
-                                </svg>{' '}
-                                <b>Share</b> button in Safari, then choose <b>Add to Home Screen</b>.
-                            </p>
-                        </div>
-                        <button
-                            onClick={dismiss}
-                            className="text-gray-400 hover:text-gray-600 text-2xl leading-none px-1 flex-shrink-0"
-                            aria-label="Dismiss"
-                        >
-                            ×
-                        </button>
-                    </div>
-                </div>
-            );
-        }
-                
         function App() {
             const [user, setUser] = useState(undefined);   // undefined = still checking
             const [hid, setHid] = useState(undefined);     // undefined = loading, null = no budget yet
@@ -1659,9 +1607,7 @@
                             </div>
                         </div>
                     )}
-                    
-                    <InstallPrompt />
-                    
+
                     {/* Bottom Tab Bar */}
                     <div className="fixed bottom-0 left-0 right-0 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.08)] border-t border-gray-100 z-20">
                         <div className="max-w-2xl mx-auto flex gap-2 p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
