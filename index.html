@@ -60,7 +60,7 @@
         }
 
         // ---- Categories ----
-        const CATEGORIES = [
+        const DEFAULT_CATEGORIES = [
             { name: "Walmart",       color: "#0071CE", icon: "🛒" },
             { name: "Costco",        color: "#E01A2B", icon: "📦" },
             { name: "Other Grocery", color: "#16A34A", icon: "🥦" },
@@ -75,15 +75,20 @@
             { name: "Savings",       color: "#84CC16", icon: "🐷" },
             { name: "Other",         color: "#6B7280", icon: "🔖" },
         ];
-        const CATEGORY_GROUPS = [
-            { title: "Shopping",     items: ["Walmart", "Costco", "Other Grocery", "Clothing", "Beauty", "Household"] },
-            { title: "Home & Bills", items: ["Rent", "Tuition", "Bills"] },
-            { title: "Lifestyle",    items: ["Uber/Transit", "Fun", "Other"] },
-            { title: "Savings",      items: ["Savings"] },
-        ];
-        const CATEGORY_COLOR = Object.fromEntries(CATEGORIES.map(c => [c.name, c.color]));
-        const CATEGORY_ICON = Object.fromEntries(CATEGORIES.map(c => [c.name, c.icon]));
-        const CATEGORY_BY_NAME = Object.fromEntries(CATEGORIES.map(c => [c.name, c]));
+        // Lookup tables are refilled from the household's own category list on every render
+        const CATEGORY_COLOR = {};
+        const CATEGORY_ICON = {};
+        const CATEGORY_BY_NAME = {};
+        function applyCategories(list) {
+            [CATEGORY_COLOR, CATEGORY_ICON, CATEGORY_BY_NAME].forEach(o => Object.keys(o).forEach(k => delete o[k]));
+            list.forEach(c => {
+                CATEGORY_COLOR[c.name] = c.color;
+                CATEGORY_ICON[c.name] = c.icon;
+                CATEGORY_BY_NAME[c.name] = c;
+            });
+        }
+        applyCategories(DEFAULT_CATEGORIES);
+        const COLOR_CHOICES = ["#0071CE", "#E01A2B", "#16A34A", "#9333EA", "#78350F", "#0D9488", "#F59E0B", "#B45309", "#0891B2", "#DC2626", "#DB2777", "#84CC16", "#6366F1", "#6B7280"];
         const INCOME_COLOR = "#059669";
 
         function objToArray(obj) {
@@ -178,12 +183,12 @@
         }
 
         // ---- Line chart of category spending across months ----
-        function CategoryTrendChart({ points }) {
+        function CategoryTrendChart({ points, categories }) {
             const canvasRef = useRef(null);
             const chartRef = useRef(null);
 
             // Only chart categories that have at least one real (tracked) data point above $0
-            const activeCategories = CATEGORIES.filter(c =>
+            const activeCategories = categories.filter(c =>
                 points.some(p => p.totals && (p.totals[c.name] || 0) > 0)
             );
 
@@ -307,7 +312,7 @@
                 <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
                     <div className="bg-white rounded-2xl shadow-lg p-6 w-full max-w-sm space-y-4 text-center">
                         <h1 className="text-2xl font-bold text-gray-800">TwoCents</h1>
-                        <p className="text-sm text-gray-500">Sign in to see your budget</p>
+                        <p className="text-sm text-gray-500">Sign in to start tracking your finances</p>
                         {error && <p className="text-xs text-red-600 break-words">{error}</p>}
                         <button
                             onClick={signInWithGoogle}
@@ -463,6 +468,13 @@
             const [showShare, setShowShare] = useState(false);
             const [copied, setCopied] = useState(false);
 
+            // Custom categories (null = use the defaults)
+            const [customCats, setCustomCats] = useState(null);
+            const [showCatEditor, setShowCatEditor] = useState(false);
+            const [newCatName, setNewCatName] = useState('');
+            const [newCatIcon, setNewCatIcon] = useState('');
+            const [newCatColor, setNewCatColor] = useState(COLOR_CHOICES[12]);
+
             const copyCode = async () => {
                 try {
                     await navigator.clipboard.writeText(hid);
@@ -556,6 +568,12 @@
                 db.ref(base + '/chartsResetAt').on('value', (snapshot) => {
                     setChartsResetAt(snapshot.val() || 0);
                 }, handleDbError('loading chart settings'));
+
+                db.ref(base + '/categories').on('value', (snapshot) => {
+                    const v = snapshot.val();
+                    const list = v ? (Array.isArray(v) ? v : Object.values(v)).filter(Boolean) : [];
+                    setCustomCats(list.length > 0 ? list : null);
+                }, handleDbError('loading categories'));
             };
 
             const requireDb = () => {
@@ -658,6 +676,63 @@
                     handleDbError('archiving month')(error);
                     alert('Failed to start new month — nothing was cleared. Error: ' + (error.message || error));
                 }
+            };
+
+            // ---- Categories ----
+            const userCats = customCats || DEFAULT_CATEGORIES;
+
+            // Also include names that appear in old entries but were removed from the list,
+            // so charts and history still show them (in grey).
+            const allCategories = useMemo(() => {
+                const list = [...userCats];
+                const seen = new Set(list.map(c => c.name));
+                const addFrom = (t) => {
+                    if (t.type !== 'subtract') return;
+                    const n = t.category || 'Other';
+                    if (!seen.has(n)) {
+                        seen.add(n);
+                        list.push({ name: n, color: '#6B7280', icon: '🔖' });
+                    }
+                };
+                transactions.forEach(addFrom);
+                history.forEach(m => (m.transactions || []).forEach(addFrom));
+                return list;
+            }, [customCats, transactions, history]);
+            applyCategories(allCategories);
+
+            const saveCategories = async (list) => {
+                if (!requireDb()) return;
+                try {
+                    if (list === null) await db.ref(base + '/categories').remove();
+                    else await db.ref(base + '/categories').set(list);
+                } catch (error) {
+                    alert('Failed to save categories: ' + (error.message || error));
+                }
+            };
+
+            const addCategory = async () => {
+                const name = newCatName.trim();
+                if (!name) { alert('Please type a name for the category.'); return; }
+                if (userCats.some(c => c.name.toLowerCase() === name.toLowerCase())) {
+                    alert('You already have a category with that name.');
+                    return;
+                }
+                const icon = newCatIcon.trim() || '🔖';
+                await saveCategories([...userCats, { name, icon, color: newCatColor }]);
+                setNewCatName('');
+                setNewCatIcon('');
+            };
+
+            const removeCategory = async (name) => {
+                if (userCats.length <= 1) { alert('You need at least one category.'); return; }
+                if (!window.confirm('Remove "' + name + '"? Past entries keep their name and still show in your history and charts.')) return;
+                await saveCategories(userCats.filter(c => c.name !== name));
+                if (category === name) setCategory('');
+            };
+
+            const resetCategories = async () => {
+                if (!window.confirm('Go back to the original category list? Past entries are not affected.')) return;
+                await saveCategories(null);
             };
 
             // ---- Chart data ----
@@ -819,7 +894,7 @@
                                 <svg className="w-8 h-8 text-indigo-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
-                                TwoCents
+                                Little Budget Helper
                             </h1>
                             <div className="flex justify-between items-center">
                                 <p className="text-sm text-gray-500">Your money, in sync!</p>
@@ -919,36 +994,34 @@
 
                                         {txType === 'subtract' && (
                                             <div>
-                                                <div className="text-xs font-semibold text-gray-500 mb-2">Category</div>
-                                                <div className="space-y-3">
-                                                    {CATEGORY_GROUPS.map(group => (
-                                                        <div key={group.title}>
-                                                            <div className="text-[11px] uppercase tracking-wide font-semibold text-gray-400 mb-1.5">
-                                                                {group.title}
-                                                            </div>
-                                                            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-                                                                {group.items.map(name => {
-                                                                    const c = CATEGORY_BY_NAME[name];
-                                                                    const selected = category === c.name;
-                                                                    return (
-                                                                        <button
-                                                                            key={c.name}
-                                                                            onClick={() => setCategory(c.name)}
-                                                                            className="flex flex-col items-center justify-center gap-1 py-2.5 px-1 rounded-xl border-2 transition-colors"
-                                                                            style={
-                                                                                selected
-                                                                                    ? { backgroundColor: c.color, borderColor: c.color, color: 'white' }
-                                                                                    : { borderColor: '#E5E7EB', color: '#374151', backgroundColor: 'white' }
-                                                                            }
-                                                                        >
-                                                                            <span className="text-xl leading-none">{c.icon}</span>
-                                                                            <span className="text-[11px] font-semibold leading-tight text-center">{c.name}</span>
-                                                                        </button>
-                                                                    );
-                                                                })}
-                                                            </div>
-                                                        </div>
-                                                    ))}
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <div className="text-xs font-semibold text-gray-500">Category</div>
+                                                    <button
+                                                        onClick={() => setShowCatEditor(true)}
+                                                        className="text-xs font-semibold text-indigo-600 underline"
+                                                    >
+                                                        ✏️ Edit categories
+                                                    </button>
+                                                </div>
+                                                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                                                    {userCats.map(c => {
+                                                        const selected = category === c.name;
+                                                        return (
+                                                            <button
+                                                                key={c.name}
+                                                                onClick={() => setCategory(c.name)}
+                                                                className="flex flex-col items-center justify-center gap-1 py-2.5 px-1 rounded-xl border-2 transition-colors"
+                                                                style={
+                                                                    selected
+                                                                        ? { backgroundColor: c.color, borderColor: c.color, color: 'white' }
+                                                                        : { borderColor: '#E5E7EB', color: '#374151', backgroundColor: 'white' }
+                                                                }
+                                                            >
+                                                                <span className="text-xl leading-none">{c.icon}</span>
+                                                                <span className="text-[11px] font-semibold leading-tight text-center">{c.name}</span>
+                                                            </button>
+                                                        );
+                                                    })}
                                                 </div>
                                             </div>
                                         )}
@@ -1091,7 +1164,7 @@
                                     </button>
                                     {showTrend && (
                                         <div className="mt-4">
-                                            <CategoryTrendChart points={monthlyCategoryTrend} />
+                                            <CategoryTrendChart points={monthlyCategoryTrend} categories={allCategories} />
                                         </div>
                                     )}
                                 </div>
@@ -1157,6 +1230,93 @@
                             </>
                         )}
                     </div>
+
+                    {/* Category Editor Modal */}
+                    {showCatEditor && (
+                        <div
+                            className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-40 p-4"
+                            onClick={() => setShowCatEditor(false)}
+                        >
+                            <div
+                                className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[85vh] flex flex-col"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <div className="flex justify-between items-center p-4 border-b border-gray-100">
+                                    <h3 className="font-bold text-lg text-gray-800">✏️ Your categories</h3>
+                                    <button
+                                        onClick={() => setShowCatEditor(false)}
+                                        className="text-gray-400 hover:text-gray-600 text-2xl leading-none px-2"
+                                    >
+                                        ×
+                                    </button>
+                                </div>
+
+                                <div className="overflow-y-auto p-4 space-y-2">
+                                    {userCats.map(c => (
+                                        <div key={c.name} className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg">
+                                            <span
+                                                className="w-8 h-8 rounded-full flex items-center justify-center text-base flex-shrink-0"
+                                                style={{ backgroundColor: c.color }}
+                                            >
+                                                {c.icon}
+                                            </span>
+                                            <span className="flex-1 min-w-0 truncate font-semibold text-gray-800 text-sm">{c.name}</span>
+                                            <button
+                                                onClick={() => removeCategory(c.name)}
+                                                className="text-red-500 hover:bg-red-50 rounded-lg px-2 py-1 text-sm font-semibold"
+                                            >
+                                                Remove
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="p-4 border-t border-gray-100 space-y-3">
+                                    <div className="text-xs font-semibold text-gray-500">Add a new category</div>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            placeholder="🙂"
+                                            value={newCatIcon}
+                                            onChange={(e) => setNewCatIcon(e.target.value)}
+                                            maxLength={4}
+                                            className="w-16 px-2 py-2 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none text-center text-lg"
+                                        />
+                                        <input
+                                            type="text"
+                                            placeholder="Name (e.g., Pets)"
+                                            value={newCatName}
+                                            onChange={(e) => setNewCatName(e.target.value)}
+                                            onKeyPress={(e) => e.key === 'Enter' && addCategory()}
+                                            maxLength={20}
+                                            className="flex-1 min-w-0 px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none"
+                                        />
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {COLOR_CHOICES.map(col => (
+                                            <button
+                                                key={col}
+                                                onClick={() => setNewCatColor(col)}
+                                                className="w-7 h-7 rounded-full border-2"
+                                                style={{ backgroundColor: col, borderColor: newCatColor === col ? '#111827' : 'transparent' }}
+                                                title={col}
+                                            />
+                                        ))}
+                                    </div>
+                                    <button
+                                        onClick={addCategory}
+                                        className="w-full py-3 rounded-lg font-semibold text-white bg-indigo-600 hover:bg-indigo-700"
+                                    >
+                                        + Add category
+                                    </button>
+                                    <div className="flex justify-between pt-1">
+                                        <button onClick={resetCategories} className="text-xs font-semibold text-gray-500 underline">Reset to original list</button>
+                                        <button onClick={() => setShowCatEditor(false)} className="text-xs font-semibold text-gray-500 underline">Done</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Share Modal */}
                     {showShare && (
