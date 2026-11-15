@@ -23,9 +23,6 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
-    let auth = null;
-    auth = firebase.auth();
-
     
     <style>
         body { margin: 0; padding: 0; }
@@ -50,11 +47,13 @@
 
         // Initialize Firebase
         let db = null;
+        let auth = null;
         let isFirebaseConfigured = false;
-
+        
         try {
             firebase.initializeApp(firebaseConfig);
             db = firebase.database();
+            auth = firebase.auth();
             isFirebaseConfigured = true;
         } catch (error) {
             console.error("Firebase initialization error:", error);
@@ -420,18 +419,18 @@ function App() {
             const setupRealtimeListeners = () => {
                 setSyncStatus('syncing');
 
-                db.ref('base + '/transactions').on('value', (snapshot) => {
+                db.ref(base + '/transactions').on('value', (snapshot) => {
                     setTransactions(objToArray(snapshot.val()));
                     setLoading(false);
                     setSyncStatus('synced');
                     setSyncError('');
                 }, handleDbError('loading transactions'));
 
-                db.ref('budget/history').on('value', (snapshot) => {
+                db.ref(base + '/history').on('value', (snapshot) => {
                     setHistory(objToArray(snapshot.val()));
                 }, handleDbError('loading history'));
 
-                db.ref('budget/chartsResetAt').on('value', (snapshot) => {
+                db.ref(base + '/chartsResetAt').on('value', (snapshot) => {
                     setChartsResetAt(snapshot.val() || 0);
                 }, handleDbError('loading chart settings'));
             };
@@ -472,7 +471,7 @@ function App() {
 
                 try {
                     setSyncStatus('syncing');
-                    await db.ref('budget/transactions').push(transaction);
+                    await db.ref(base + '/transactions').push(transaction);
                     setSyncStatus('synced');
                 } catch (error) {
                     handleDbError('saving transaction')(error);
@@ -485,7 +484,7 @@ function App() {
                 if (!window.confirm('Delete this transaction?')) return;
                 try {
                     setSyncStatus('syncing');
-                    await db.ref('budget/transactions/' + key).remove();
+                    await db.ref(base + '/transactions/' + key).remove();
                     setSyncStatus('synced');
                 } catch (error) {
                     handleDbError('deleting transaction')(error);
@@ -497,7 +496,7 @@ function App() {
                 if (!requireDb()) return;
                 try {
                     setSyncStatus('syncing');
-                    await db.ref('budget/transactions/' + tx.key).update({ paid: !tx.paid });
+                    await db.ref(base + '/transactions/' + tx.key).update({ paid: !tx.paid });
                     setSyncStatus('synced');
                 } catch (error) {
                     handleDbError('updating paid status')(error);
@@ -529,8 +528,8 @@ function App() {
 
                 try {
                     setSyncStatus('syncing');
-                    await db.ref('budget/history').push(monthData);
-                    await db.ref('budget/transactions').remove();
+                    await db.ref(base + '/history').push(monthData);
+                    await db.ref(base + '/transactions').remove();
                     setSyncStatus('synced');
                 } catch (error) {
                     handleDbError('archiving month')(error);
@@ -648,7 +647,7 @@ function App() {
                 )) return;
                 try {
                     setSyncStatus('syncing');
-                    await db.ref('budget/chartsResetAt').set(Date.now());
+                    await db.ref(base + '/chartsResetAt').set(Date.now());
                     setSyncStatus('synced');
                 } catch (error) {
                     handleDbError('resetting chart')(error);
@@ -701,6 +700,7 @@ function App() {
                             </h1>
                             <div className="flex justify-between items-center">
                                 <p className="text-sm text-gray-500">Tracking our finances together 💑</p>
+                                <button onClick={() => auth.signOut()} className="text-xs font-semibold text-gray-500 underline">Log out</button>
                                 <p className={`text-sm font-semibold ${getSyncStatusColor()}`}>
                                     {getSyncStatusText()}
                                 </p>
