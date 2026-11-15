@@ -22,7 +22,11 @@
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    let auth = null;
+    auth = firebase.auth();
 
+    
     <style>
         body { margin: 0; padding: 0; }
     </style>
@@ -274,6 +278,57 @@
             );
         }
 
+        function LoginScreen() {
+    const [error, setError] = useState('');
+    const [busy, setBusy] = useState(false);
+
+    const signInWithGoogle = async () => {
+        setError('');
+        setBusy(true);
+        try {
+            const provider = new firebase.auth.GoogleAuthProvider();
+            await auth.signInWithPopup(provider);
+        } catch (e) {
+            if (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment') {
+                try {
+                    await auth.signInWithRedirect(new firebase.auth.GoogleAuthProvider());
+                    return;
+                } catch (e2) {
+                    setError(e2.message);
+                }
+            } else if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
+                setError(e.message);
+            }
+        }
+        setBusy(false);
+    };
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-lg p-6 w-full max-w-sm space-y-4 text-center">
+                <h1 className="text-2xl font-bold text-gray-800">💑 Budget Helper</h1>
+                <p className="text-sm text-gray-500">Sign in to see your budget</p>
+                {error && <p className="text-xs text-red-600 break-words">{error}</p>}
+                <button
+                    onClick={signInWithGoogle}
+                    disabled={busy}
+                    className="w-full py-3 rounded-lg font-semibold text-gray-700 bg-white border-2 border-gray-200 hover:bg-gray-50 flex items-center justify-center gap-2"
+                >
+                    <span className="text-lg">🔐</span>
+                    {busy ? 'Signing in...' : 'Continue with Google'}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function App() {
+    const [user, setUser] = useState(undefined);
+    useEffect(() => auth.onAuthStateChanged(setUser), []);
+    if (user === undefined) return <div className="min-h-screen flex items-center justify-center text-gray-600">Loading...</div>;
+    if (!user) return <LoginScreen />;
+    return <BudgetTracker key={user.uid} user={user} />;
+}
         const TABS = [
             { id: 'dashboard', label: '🏠 Dashboard' },
             { id: 'charts', label: '📊 Charts' },
@@ -281,7 +336,8 @@
         ];
         const TAB_IDS = TABS.map(t => t.id);
 
-        function BudgetTracker() {
+        function BudgetTracker({ user }) {
+            const base = 'users/' + user.uid + '/budget';
             const [activeTab, setActiveTab] = useState('dashboard');
             const touchStartRef = useRef(null);
 
@@ -364,7 +420,7 @@
             const setupRealtimeListeners = () => {
                 setSyncStatus('syncing');
 
-                db.ref('budget/transactions').on('value', (snapshot) => {
+                db.ref('base + '/transactions').on('value', (snapshot) => {
                     setTransactions(objToArray(snapshot.val()));
                     setLoading(false);
                     setSyncStatus('synced');
@@ -1051,7 +1107,7 @@
             );
         }
 
-        ReactDOM.render(<BudgetTracker />, document.getElementById('root'));
+        ReactDOM.render(<App />, document.getElementById('root'));
     </script>
 </body>
 </html>
