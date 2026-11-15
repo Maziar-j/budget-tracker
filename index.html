@@ -323,10 +323,26 @@
 
 function App() {
     const [user, setUser] = useState(undefined);
-    useEffect(() => auth.onAuthStateChanged(setUser), []);
-    if (user === undefined) return <div className="min-h-screen flex items-center justify-center text-gray-600">Loading...</div>;
+    const [base, setBase] = useState(null);
+
+    useEffect(() => auth.onAuthStateChanged(u => { setBase(null); setUser(u); }), []);
+
+    useEffect(() => {
+        if (!user) return;
+        const personal = 'users/' + user.uid + '/budget';
+        db.ref('members/' + user.uid).once('value')
+            .then(snap => {
+                const hid = snap.val();
+                setBase(hid ? 'households/' + hid : personal);
+            })
+            .catch(() => setBase(personal));
+    }, [user]);
+
+    if (user === undefined || (user && !base)) {
+        return <div className="min-h-screen flex items-center justify-center text-gray-600">Loading...</div>;
+    }
     if (!user) return <LoginScreen />;
-    return <BudgetTracker key={user.uid} user={user} />;
+    return <BudgetTracker key={base} user={user} base={base} />;
 }
         const TABS = [
             { id: 'dashboard', label: '🏠 Dashboard' },
@@ -335,8 +351,7 @@ function App() {
         ];
         const TAB_IDS = TABS.map(t => t.id);
 
-        function BudgetTracker({ user }) {
-            const base = 'users/' + user.uid + '/budget';
+        function BudgetTracker({ user, base }) {
             const [activeTab, setActiveTab] = useState('dashboard');
             const touchStartRef = useRef(null);
 
